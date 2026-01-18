@@ -1,0 +1,12 @@
+services:
+  organizer:
+    build: .
+    volumes:
+      # The User Data (Target)
+      - ~/Documents:/data/target:rw
+      # The App State (Cache & Plans)
+      - ./app_data:/data/state:rw
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DATABASE_URL=sqlite:////data/state/state.db
+      - ROOT_DIR=/data/target

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.env
+app_data/
+demo_data/
+*.db
+uv.lock
+demo_data/

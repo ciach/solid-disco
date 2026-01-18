@@ -1,0 +1,27 @@
+[project]
+name = "fastmcp-organizer"
+version = "0.1.0"
+description = "A production-ready FastMCP File Organizer"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp",
+    "pydantic",
+    "langfuse",
+    "click",
+    "python-dotenv",
+    "rich"
+]
+
+[project.scripts]
+fastmcp-organizer = "fastmcp_organizer.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "pytest-mock"
+]
