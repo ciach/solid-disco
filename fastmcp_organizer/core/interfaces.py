@@ -17,6 +17,7 @@ class ClassificationResult(BaseModel):
     confidence_score: float
     requires_deep_scan: bool
     path: str
+    reasoning: Optional[str] = None
 
 class PlanItem(BaseModel):
     id: str

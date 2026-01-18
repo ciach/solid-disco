@@ -72,12 +72,14 @@ class OrganizerService:
             if dest_path == file_path:
                 continue
 
+            reasoning_text = classification.reasoning or f"Classified as {classification.category} (Confidence: {classification.confidence_score})"
+            
             item = PlanItem(
                 id=str(uuid.uuid4()),
                 plan_id=plan_id,
                 src_path=str(file_path),
                 dest_path=str(dest_path),
-                reasoning=f"Classified as {classification.category} (Confidence: {classification.confidence_score})",
+                reasoning=reasoning_text,
                 status="PENDING"
             )
             items.append(item)

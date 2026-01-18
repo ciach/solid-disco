@@ -1,3 +1,7 @@
+import os
+# Set service name immediately for OTel/Langfuse
+os.environ.setdefault("OTEL_SERVICE_NAME", "fastmcp-organizer")
+
 import click
 from pathlib import Path
 from rich.console import Console
@@ -82,6 +86,55 @@ def execute(plan_id):
                 console.print(f"[green]{res}[/green]")
     except Exception as e:
          console.print(f"[bold red]Error:[/bold red] {e}")
+@click.argument('plan_id')
+def feedback(plan_id):
+    """Provide feedback for a plan to improve AI"""
+    service = Context.get_service()
+    plan = service.get_plan(plan_id)
+    if not plan:
+        console.print(f"[bold red]Plan {plan_id} not found[/bold red]")
+        return
+        
+    client = Observability.get_client()
+    if not client:
+        console.print("[red]Langfuse not configured. Cannot send feedback.[/red]")
+        return
+
+    console.print(f"[bold]Providing feedback for Plan: {plan.id}[/bold]")
+    console.print("Rate each item (1=Good, 0=Bad). Press Enter to skip.")
+    
+    for item in plan.items:
+        console.print(f"\nFile: [cyan]{Path(item.src_path).name}[/cyan] -> [green]{Path(item.dest_path).parent.name}[/green]")
+        console.print(f"Reasoning: {item.reasoning}")
+        
+        score_input = click.prompt("Score (1/0)", default="", show_default=False)
+        if score_input not in ["0", "1"]:
+            continue
+            
+        score_val = int(score_input)
+        comment = click.prompt("Comment (optional)", default="", show_default=False)
+        
+        # We need a trace_id to associate this feedback with. 
+        # Making a design choice here: Since we didn't save trace_id in DB, we'll just log a global score
+        # OR ideally, we should have stored trace_id in Plan or PlanItem.
+        # For now, we'll create a NEW trace for 'Feedback' and reference the filename/category.
+        # Better approach: In the future, verify we store trace IDs.
+        
+        client.score(
+            name="user-accuracy",
+            value=score_val,
+            comment=comment,
+            id=f"score-{item.id}", # stable key
+            metadata={
+                "plan_id": plan_id,
+                "file": Path(item.src_path).name,
+                "category": Path(item.dest_path).parent.name
+            }
+        )
+        console.print("[green]Feedback Sent![/green]")
+        
+    Observability.flush()
+    console.print("\n[bold green]Thank you! Feedback flushed to Langfuse.[/bold green]")
 
 def main():
     cli()

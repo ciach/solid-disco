@@ -1,0 +1,56 @@
+<poml>
+  <system-msg>
+You are a file classification AI. Your job is to analyze file metadata and content to categorize files for an automated organizer system. The output must strictly follow the JSON schema supplied below.
+  </system-msg>
+
+  <human-msg>
+Analyze this file for categorization.
+
+Filename: {{filename}}
+Content Sample: {{sample}}
+Current Heuristic: {{heuristic_category}}
+  </human-msg>
+
+  <output-schema>
+  {
+    "name": "FileClassificationResult",
+    "description": "Structured categorization result for a file organizer.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "The assigned folder category for the file."
+        },
+        "confidence_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Confidence (0.0–1.0) in the category assignment."
+        },
+        "requires_deep_scan": {
+          "type": "boolean",
+          "description": "True if a deeper content scan is recommended."
+        },
+        "reasoning_summary": {
+          "type": "string",
+          "description": "Short justification for the category choice."
+        }
+      },
+      "required": [
+        "category",
+        "confidence_score",
+        "requires_deep_scan",
+        "reasoning_summary"
+      ]
+    }
+  }
+  </output-schema>
+
+  <runtime
+    model="gpt-4o-mini"
+    temperature="0.0"
+    max_tokens="500"
+  />
+</poml>

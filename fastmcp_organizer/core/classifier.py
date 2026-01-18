@@ -1,3 +1,5 @@
+import xml.etree.ElementTree as ET
+import os
 from typing import Optional
 from pathlib import Path
 from pydantic import BaseModel
@@ -60,8 +62,14 @@ class LLMClassifier(IClassifier):
     def __init__(self, fallback_classifier: IClassifier):
         self.fallback = fallback_classifier
         self.client = None
-        if Config.OPENAI_API_KEY:
-            self.client = OpenAI(api_key=Config.OPENAI_API_KEY)
+        
+        if Config.LLM_PROVIDER == "ollama":
+            self.client = OpenAI(
+                base_url=Config.OLLAMA_BASE_URL,
+                api_key="ollama" # Dummy key
+            )
+        elif Config.OPENAI_API_KEY:
+             self.client = OpenAI(api_key=Config.OPENAI_API_KEY)
 
     def classify(self, metadata: FileMetadata, content_sample: Optional[str] = None) -> ClassificationResult:
         # 1. Run Heuristic First
@@ -79,34 +87,97 @@ class LLMClassifier(IClassifier):
             return heuristic_result
 
     def _call_llm(self, metadata: FileMetadata, content_sample: Optional[str], heuristic_res: ClassificationResult) -> ClassificationResult:
-        prompt = f"""
-        Analyze this file to categorize it for a file organizer.
-        Filename: {Path(metadata.path).name}
-        Content Sample (first/last 4KB):
-        {content_sample or "N/A"}
+
         
-        Current Heuristic Category: {heuristic_res.category}
+        filename = Path(metadata.path).name
+        sample = content_sample or "N/A"
         
-        Return a JSON object with:
-        - category: A single word folder name (e.g. Financial, Personal, Work, Images, Code)
-        - confidence_score: Float between 0.0 and 1.0
-        - requires_deep_scan: Boolean
-        """
+        # 1. Load POML (File-based)
+        poml_path = Path(__file__).parent.parent / "prompts" / "classifier.poml"
+        poml_system = "You are a helpful assistant."
+        poml_user = "Analyze {{filename}}"
+        poml_schema = None
         
-        input_data = {"messages": [{"role": "user", "content": prompt}]}
+        try:
+            if poml_path.exists():
+                tree = ET.parse(poml_path)
+                root = tree.getroot()
+                poml_system = root.find("system-msg").text.strip()
+                poml_user = root.find("human-msg").text.strip()
+                schema_text = root.find("output-schema").text.strip()
+                if schema_text:
+                    import json
+                    poml_schema = json.loads(schema_text)
+        except Exception as e:
+            print(f"[WARN] Failed to load POML: {e}")
+
+        # 2. Determine Source (Langfuse > POML)
+        langfuse = Observability.get_client()
+        lf_prompt = None
+        current_source = "poml"
         
+        if langfuse:
+            try:
+                lf_prompt = langfuse.get_prompt("file_classifier")
+                current_source = "langfuse"
+            except:
+                pass # Stick to POML
+
+        # 3. Construct Messages
+        messages = []
+        if current_source == "langfuse" and lf_prompt:
+             try:
+                compiled = lf_prompt.compile(filename=filename, sample=sample, heuristic_category=heuristic_res.category)
+                if isinstance(compiled, str):
+                    messages = [{"role": "system", "content": "You are a file classification AI. Output strictly valid JSON."}, {"role": "user", "content": compiled}]
+                elif isinstance(compiled, list):
+                    messages = compiled
+             except Exception as e:
+                print(f"[WARN] Prompt compile error: {e}")
+                current_source = "poml_fallback" # Logic fallback
+        
+        if not messages: # POML or Fallback
+            # Inject schema into system prompt if available (Crucial for Ollama/Models without native struct output)
+            schema_str = ""
+            if poml_schema:
+                import json
+                schema_str = f"\n\nJSON Schema:\n{json.dumps(poml_schema, indent=2)}"
+            
+            user_msg = poml_user.replace("{{filename}}", filename)\
+                                .replace("{{sample}}", sample)\
+                                .replace("{{heuristic_category}}", heuristic_res.category)
+            messages = [
+                {"role": "system", "content": poml_system + schema_str},
+                {"role": "user", "content": user_msg}
+            ]
+
+        # 4. Prepare Response Format
+        # If POML has strict schema, we can use it. 
+        # OpenAI/Ollama support varies. We'll use json_object for safest compat, 
+        # or try json_schema if configured.
+        # For this implementation, sticking to json_object plus schema instructions in prompt is safest cross-provider,
+        # BUT user requested schema usage.
+        
+        resp_fmt = {"type": "json_object"}
+        if poml_schema and Config.LLM_PROVIDER == "openai":
+             # Strict Structured Output for OpenAI (requires method adjustment usually, passing response_format=schema)
+             # But standard library expects {"type": "json_schema", "json_schema": ...}
+             resp_fmt = {
+                 "type": "json_schema",
+                 "json_schema": poml_schema
+             }
+
         with Observability.generation(
             name="OpenAI Classification",
             model=Config.MODEL_NAME,
-            input=input_data
+            input=messages,
+            prompt=lf_prompt, # None if POML
+            metadata={"prompt_source": current_source}
         ) as gen:
             response = self.client.chat.completions.create(
                 model=Config.MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": "You are a helpful file organization assistant. Respond only in JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}
+                messages=messages,
+                response_format=resp_fmt
             )
             
             import json
@@ -118,5 +189,6 @@ class LLMClassifier(IClassifier):
             category=data.get("category", "Misc"),
             confidence_score=data.get("confidence_score", 0.5),
             requires_deep_scan=data.get("requires_deep_scan", False),
-            path=metadata.path
+            path=metadata.path,
+            reasoning=data.get("reasoning_summary")
         )
